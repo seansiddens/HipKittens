@@ -28,15 +28,27 @@ namespace kittens {
 /* ----------  GENERAL CONSTANTS FOR KITTENS  ---------- */
 /**
  * @brief Constant representing number of threads in a warp.
+ *
+ * gfx1250 is wave-32; CDNA generations are wave-64. We pick the
+ * compile-time value via the `KITTENS_UDNA1` define which the build system
+ * is expected to set when compiling for `--offload-arch=gfx1250`.
  */
+#ifdef KITTENS_UDNA1
+constexpr int WARP_THREADS{32};
+#else
 constexpr int WARP_THREADS{64};
+#endif
 
 /**
 
  * @brief Get the warp ID of the current thread.
  * @return The warp ID.
  */
-__device__ __forceinline__ int warpid() { return threadIdx.x >> 6; } 
+#ifdef KITTENS_UDNA1
+__device__ __forceinline__ int warpid() { return threadIdx.x >> 5; }
+#else
+__device__ __forceinline__ int warpid() { return threadIdx.x >> 6; }
+#endif
 
 /**
  * @brief Get the number of warps in the threadblock.
@@ -48,7 +60,11 @@ __device__ __forceinline__ int warpid() { return threadIdx.x >> 6; }
  * @brief Get the lane ID of the current thread within its warp.
  * @return The lane ID.
  */
+#ifdef KITTENS_UDNA1
+__device__ __forceinline__ int laneid() { return threadIdx.x & 0x1f; }
+#else
 __device__ __forceinline__ int laneid() { return threadIdx.x & 0x3f; }
+#endif
 
 using i32x2 = int32_t __attribute__((ext_vector_type(2)));
 using u32x2 = uint32_t __attribute__((ext_vector_type(2)));
@@ -105,10 +121,28 @@ __host__ __device__ inline int ceil_div(int a, int b) {
 }
 
 
+#ifdef KITTENS_UDNA1
+/**
+ * @brief LDS capacity exposed by default per workgroup on gfx1250.
+ *
+ * The gfx1250 LDS/WGP$ pool is 384 KB split into six 64 KB segments. At least one
+ * segment must remain as WGP$, leaving up to 320 KB addressable as LDS. The
+ * library default is one segment (64 KB); kernels needing more should request
+ * a larger dynamic shared-memory size at launch via `hipFuncSetAttribute`.
+ */
+constexpr int MAX_SHARED_MEMORY = 65536;
+constexpr int LDS_SEGMENT_BYTES = 65536;
+constexpr int LDS_NUM_SEGMENTS  = 5;
+constexpr int LDS_TOTAL_BYTES   = LDS_SEGMENT_BYTES * LDS_NUM_SEGMENTS;
+constexpr int NUM_XCDS = 1;
+constexpr int CUS_PER_XCD = 64;
+constexpr int NUM_CUS = CUS_PER_XCD * NUM_XCDS;
+#else
 constexpr int MAX_SHARED_MEMORY = 160000;
 constexpr int NUM_XCDS = 8;
 constexpr int CUS_PER_XCD = 32;
 constexpr int NUM_CUS = CUS_PER_XCD * NUM_XCDS;
+#endif
 
 /* ----------  CUSTOM TYPES  ---------- */
 typedef uint32_t      uint2_t __attribute__((ext_vector_type(2)));
@@ -261,6 +295,36 @@ using bytes_16 = HIP_vector_type<float, 4>;
  * @brief Dummy structure for alignment purposes. Needed for WGMMA and TMA calls.
  */
 struct KITTENS_DEFAULT_ALIGN alignment_dummy { int dummy; };
+
+#ifdef KITTENS_UDNA1
+/**
+ * @brief Compile-time tag selecting an LDS segment for tile placement on gfx1250.
+ *
+ * The gfx1250 LDS has six 64KB segments served by two read ports at 256 B/cycle
+ * each. Placing operands `A` in `segment<0>` and `B` in `segment<1>` lets the
+ * hardware satisfy `A` and `B` reads from distinct ports in parallel, reaching
+ * the full 512 B/cycle peak. Segment 5 is conventionally reserved as WGP$,
+ * leaving indices 0..4 available.
+ *
+ * @tparam IDX 0..4 -- segment index. The allocator aligns the allocation start
+ * to `IDX * 64 KB` so multiple tiles can share a single segment.
+ */
+template<int IDX>
+struct segment {
+    static_assert(IDX >= 0 && IDX < LDS_NUM_SEGMENTS,
+                  "segment index must be in [0, 5)");
+    static constexpr int index       = IDX;
+    static constexpr int byte_offset = IDX * LDS_SEGMENT_BYTES;
+};
+
+namespace ducks {
+namespace segment_tag {
+template<typename T> struct is_segment : std::false_type {};
+template<int I>      struct is_segment<::kittens::segment<I>> : std::true_type {};
+template<typename T> concept all = is_segment<T>::value;
+} // namespace segment_tag
+} // namespace ducks
+#endif // KITTENS_UDNA1
 /**
  * @brief Very simple allocator for dynamic shared memory. Advances pointer and tracks alignments.
  * @tparam default_alignment The default alignment this allocator will enforce. If <=0 (default -1) it will not align.
@@ -268,6 +332,9 @@ struct KITTENS_DEFAULT_ALIGN alignment_dummy { int dummy; };
 template<int default_alignment=16> 
 struct shared_allocator {
     int *ptr;
+#ifdef KITTENS_UDNA1
+    int *base;
+#endif
 
     private:
         // Recursive template to generate N-dimensional array type
@@ -299,7 +366,11 @@ struct shared_allocator {
         * @brief Construct a new shared allocator using a pointer to extern shared memory.
         * @param[in] _ptr Pointer to the start of the extern shared memory.
         */
+#ifdef KITTENS_UDNA1
+        __device__ shared_allocator(int *_ptr): ptr(_ptr), base(_ptr) {}
+#else
         __device__ shared_allocator(int *_ptr): ptr(_ptr) {}
+#endif
         /**
         * @brief Allocate shared memory for a single instance or N-dimensional array of type A.
         * @tparam A The type of the object to allocate.
@@ -331,6 +402,33 @@ struct shared_allocator {
             ptr += sizeof(at)/sizeof(int);
             return *p;
         }
+
+#ifdef KITTENS_UDNA1
+        /**
+        * @brief Allocate shared memory inside a specific LDS segment on gfx1250.
+        *
+        * Positions the allocator pointer at `base + IDX * 64KB` (where `base`
+        * is the dynamic-shared-memory pointer this allocator was constructed
+        * with), then allocates the requested type there. Multiple
+        * `allocate_in<segment<IDX>>` calls into the same segment pack tightly.
+        *
+        * @tparam SEG    A `kittens::segment<IDX>` tag.
+        * @tparam A      The type of the object to allocate.
+        * @tparam dims   Optional array dimensions.
+        */
+        template<typename SEG, typename A, size_t... dims>
+            requires ducks::segment_tag::all<SEG>
+        __device__ inline variadic_array_t<A, dims...>& allocate_in() {
+            int* target = base + (SEG::byte_offset / sizeof(int));
+            // If we've already allocated past the requested segment, keep
+            // packing where we are; otherwise jump forward to the segment.
+            if (ptr < target) ptr = target;
+            using at = variadic_array_t<A, dims...>;
+            at* p = reinterpret_cast<at*>(ptr);
+            ptr += sizeof(at) / sizeof(int);
+            return *p;
+        }
+#endif // KITTENS_UDNA1
 };
 
 } // namespace kittens
