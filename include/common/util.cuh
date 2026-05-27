@@ -339,13 +339,21 @@ template<typename T> concept all = is_segment<T>::value;
 #endif // KITTENS_UDNA1
 /**
  * @brief Very simple allocator for dynamic shared memory. Advances pointer and tracks alignments.
+ *
+ * Maintains a bump cursor `ptr` that advances on every `allocate*()` call. On
+ * gfx1250 the allocator also remembers `base` -- the unmoved origin of the
+ * shared-memory region captured at construction -- so segment-aware
+ * allocations (`allocate_in<segment<IDX>>`) can jump to `base + IDX * 64 KB`
+ * regardless of how far the bump cursor has already advanced.
+ *
  * @tparam default_alignment The default alignment this allocator will enforce. If <=0 (default -1) it will not align.
  */
 template<int default_alignment=16> 
 struct shared_allocator {
-    int *ptr;
+    int *ptr;   ///< Bump cursor; advances on every allocate*() call.
 #ifdef KITTENS_UDNA1
-    int *base;
+    int *base;  ///< Frozen origin captured at construction; never moves.
+                ///< Reference point for `allocate_in<segment<IDX>>` segment starts.
 #endif
 
     private:
@@ -376,6 +384,11 @@ struct shared_allocator {
     public:
         /**
         * @brief Construct a new shared allocator using a pointer to extern shared memory.
+        *
+        * `_ptr` is captured into the bump cursor `ptr`; on gfx1250 it is also
+        * stashed into `base` so segment-aware allocations can recover the
+        * original origin regardless of how far the cursor has advanced.
+        *
         * @param[in] _ptr Pointer to the start of the extern shared memory.
         */
 #ifdef KITTENS_UDNA1
