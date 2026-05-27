@@ -1,13 +1,11 @@
 /**
  * @file gemm_expert.cpp
- * @brief Rung 7 -- expert-scheduled bf16 -> fp32 GEMM with reuse-B WMMA burst.
+ * @brief Rung 7 -- expert-scheduled bf16 -> fp32 GEMM.
  *
  * Diff vs `gemm_segment`: enable expert SCHED_MODE for the K-loop scope via
- * `kittens::sched::expert` (RAII) and replace `mma_ABt` with
- * `mma_ABt_burst<4>` -- four `__builtin_amdgcn_wmma_f32_16x16x32_bf16` calls
- * with `matrix_b_reuse=true` on the 2nd..4th to engage the hardware's
- * operand-reuse cache. The LLVM `SIInsertHardClauses` pass automatically
- * clauses the WMMA burst.
+ * `kittens::sched::expert` (RAII). The matrix-unit operand reuse cache is
+ * already engaged by `mma_ABt`'s m-outer/n-inner zigzag traversal (B-reuse
+ * within each column, A-reuse on column switches via zigzag).
  */
 
 #include "common.h"
@@ -67,7 +65,7 @@ void gemm_expert_kernel(const gemm_globals g, int M, int N, int K)
 
         kittens::sync::wait();
         kittens::sync::wait_ds();
-        mma_ABt_burst(C_acc, A_reg, B_reg, C_acc);
+        mma_ABt(C_acc, A_reg, B_reg, C_acc);
 
         kittens::sync::wait_async();
     }

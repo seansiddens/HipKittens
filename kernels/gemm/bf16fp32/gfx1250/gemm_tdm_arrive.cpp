@@ -146,7 +146,7 @@ void gemm_tdm_arrive_kernel(const gemm_globals g, int M, int N, int K)
             B_reg, B_lds[cur] + Pad::padded(warp_c * WARP_N * K_STEP));
 
         sync::wait_ds();
-        mma_ABt_burst(C_acc, A_reg, B_reg, C_acc);
+        mma_ABt(C_acc, A_reg, B_reg, C_acc);
 
         sync::sync();
     }

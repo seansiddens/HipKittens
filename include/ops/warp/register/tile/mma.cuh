@@ -29,11 +29,32 @@ __device__ static inline void mfma161632(      float2 (&D)[2],
 /**
  * @brief gfx1250 WMMA bf16 16x16x32 helper.
  *
- * Wraps `__builtin_amdgcn_wmma_f32_16x16x32_bf16`. The two `_reuse` template
- * parameters drive the hardware operand-reuse cache: setting `B_reuse=true`
- * on the 2nd..Nth call of a burst that shares the same `B` keeps `B` in the
- * XDL operand cache, saving VGPR read bandwidth. Use `mma_ABt_burst<N>` for
- * a pre-baked reuse-B zigzag burst.
+ * Wraps `__builtin_amdgcn_wmma_f32_16x16x32_bf16` -- the bf16 entry point
+ * into the gfx1250 matrix unit. Instruction shape: A is 16x32 bf16, B is
+ * 32x16 bf16, C/D is 16x16 fp32.
+ *
+ * Operand reuse cache (the `_reuse` template params). The matrix unit has a
+ * small staging cache holding the most recently consumed A and B operand
+ * bundles. If the *next* WMMA call uses the same A and/or B as the current
+ * one, setting the matching `_reuse=true` on that next call tells the
+ * hardware to read the operand from the cache instead of from the VGPR file
+ * -- saving VGPR read bandwidth and easing the VGPR-bank pressure that the
+ * WMMA operand-read path would otherwise create.
+ *
+ * Rules of use:
+ *   - Only set `_reuse=true` on the **second-or-later** call of a contiguous
+ *     burst that shares the operand. The first call has nothing to reuse and
+ *     must be `_reuse=false`.
+ *   - The reusing call must have the **identical opcode** and the **same
+ *     operand VGPR block** as the previous call. Mixing dtypes or changing
+ *     the source register block is undefined.
+ *   - The cache is small -- one slot per operand. The most recent A (or B)
+ *     evicts the previous one.
+ *
+ * Callers normally do not set these hints by hand -- the higher-level
+ * `mma_ABt` derives them from the iteration position in its m-outer/n-inner
+ * zigzag traversal, so passing the defaults here just means "first call of a
+ * burst" and `mma_ABt` overrides them for subsequent calls.
  *
  * `D`, `A`, `B`, `C` are the `rt_base::data` arrays:
  *   - C accumulator: `float2[4]` (8 floats per lane).
@@ -239,14 +260,25 @@ __device__ static inline void mma_AB_base(rt_base<float, ducks::rt_layout::col, 
  * @brief Base dot product operation for row layout.
  *
  * This function performs the base dot product operation
- * using the `hmma16816` function for matrices in row layout.
+ * using the mma function for matrices in row layout.
  *
- * @param[out] d The output rt_base<float2, row_layout> accumulator.
- * @param[in] a The first input rt_base<bf16_2, row_layout> matrix.
- * @param[in] b The second input rt_base<bf16_2, row_layout> matrix in row-major mode.
- * @param[in] c The input rt_base<float2, row_layout> accumulator matrix.
+ * The `A_reuse` / `B_reuse` template parameters propagate down to the gfx1250
+ * WMMA builtin's operand-reuse hints (see `wmma161632`). They default to
+ * `false` and are silently ignored on CDNA (MFMA has no operand reuse cache).
+ *
+ * @tparam A_reuse,B_reuse  Operand-reuse hints (gfx1250 only).
+ * @tparam D_shape,A_shape,B_shape,C_shape  Register-tile shape tags.
+ * @tparam MM_Operand_T     Operand element type for A and B. Defaults to bf16.
+ *
+ * @param[out] d The output rt_base<float, col_layout> accumulator.
+ * @param[in]  a The first input rt_base<MM_Operand_T, row_layout> matrix.
+ * @param[in]  b The second input rt_base<MM_Operand_T, row_layout> matrix in row-major mode.
+ * @param[in]  c The input rt_base<float, col_layout> accumulator matrix.
  */
-template<ducks::rt_shape::all D_shape, ducks::rt_shape::all A_shape, ducks::rt_shape::all B_shape, ducks::rt_shape::all C_shape, typename MM_Operand_T=bf16>
+template<bool A_reuse = false, bool B_reuse = false,
+         ducks::rt_shape::all D_shape, ducks::rt_shape::all A_shape,
+         ducks::rt_shape::all B_shape, ducks::rt_shape::all C_shape,
+         typename MM_Operand_T = bf16>
 __device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::col, D_shape> &d,
     const rt_base<MM_Operand_T, ducks::rt_layout::row, A_shape> &a,
     const rt_base<MM_Operand_T, ducks::rt_layout::row, B_shape> &b, // in row-major mode
@@ -274,7 +306,7 @@ __device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::col,
                   A_rows == 16 && A_cols == 32 &&
                   B_rows == 16 && B_cols == 32 &&
                   std::is_same_v<C_shape, typename ducks::rt_shape::rt_16x16>) {
-        wmma161632<false, false>(d.data, a.data, b.data, c.data);
+        wmma161632<A_reuse, B_reuse>(d.data, a.data, b.data, c.data);
     } else {
         static_assert(false, "Unsupported shape combination for gfx1250 mma_ABt_base");
     }
@@ -493,15 +525,12 @@ __device__ static inline void mma_AB(D &d,
  * @brief Dot product operation for row layout.
  *
  * This function performs the dot product operation
- * using the `hmma16816` function.
+ * using the `mma_ABt_base` function.
  *
- * @tparam N The number of row tiles.
- * @tparam K The number of column tiles for the A matrix and row tiles for the B matrix.
- * @tparam M The number of column tiles for the B matrix.
- * @param[out] d The output rt_fl<N, M, row_layout> accumulator.
- * @param[in] a The first input rt_bf<N, K, row_layout> matrix.
- * @param[in] b The second input rt_bf<M, K, row_layout> matrix in row-major mode.
- * @param[in] c The input rt_fl<N, M, row_layout> accumulator matrix.
+ * @tparam D Accumulator register-tile type (col layout).
+ * @tparam A First operand register-tile type (row layout).
+ * @tparam B Second operand register-tile type (row layout), row-major for ABt.
+ * @tparam C Input accumulator register-tile type (col layout).
  */
 template<ducks::rt::col_layout D, ducks::rt::row_layout A, ducks::rt::row_layout B, ducks::rt::col_layout C>
 __device__ static inline void mma_ABt(D &d,
@@ -522,6 +551,35 @@ __device__ static inline void mma_ABt(D &d,
             std::is_same_v<typename B::T, fp8e4m3> && std::is_same_v<typename C::T, float>)
     );
 
+#ifdef KITTENS_UDNA1
+    // gfx1250: m-outer, n-inner zigzag with reuse hints derived from
+    // (M, S) -- both compile-time template parameters of the nested lambdas.
+    [&]<std::size_t... Ms>(std::index_sequence<Ms...>) {
+        ([&]<std::size_t M>() {
+            [&]<std::size_t... Ss>(std::index_sequence<Ss...>) {
+                ([&]<std::size_t S>() {
+                    constexpr std::size_t n        = (M & 1) ? (D::height - 1 - S) : S;
+                    constexpr bool        B_reuse  = (S > 0);              // within-column
+                    constexpr bool        A_reuse  = (S == 0) && (M > 0);  // column-switch (zigzag)
+                    // k = 0: pull accumulator from `c`.
+                    mma_ABt_base<A_reuse, B_reuse>(
+                        d.tiles[n][M], a.tiles[n][0], b.tiles[M][0], c.tiles[n][M]);
+                    // k >= 1: chain into `d`. A and B both advance, so no reuse.
+                    if constexpr (A::width > 1) {
+                        [&]<std::size_t... Ks>(std::index_sequence<Ks...>) {
+                            ([&]<std::size_t K>() {
+                                constexpr std::size_t k = K + 1;
+                                mma_ABt_base<false, false>(
+                                    d.tiles[n][M], a.tiles[n][k], b.tiles[M][k], d.tiles[n][M]);
+                            }.template operator()<Ks>(), ...);
+                        }(std::make_index_sequence<A::width - 1>{});
+                    }
+                }.template operator()<Ss>(), ...);
+            }(std::make_index_sequence<D::height>{});
+        }.template operator()<Ms>(), ...);
+    }(std::make_index_sequence<D::width>{});
+#else
+    // CDNA path: n-outer, m-inner row-major. No operand reuse cache.
     #pragma unroll
     for(int n = 0; n < D::height; n++) {
         #pragma unroll
@@ -543,53 +601,8 @@ __device__ static inline void mma_ABt(D &d,
             }
         }
     }
-}
-
-#ifdef KITTENS_UDNA1
-/**
- * @brief Reuse-B WMMA burst for gfx1250 -- 2x2 register-tile layout.
- *
- * For the canonical `rt_fl<WM, WN, col_l, rt_16x16_s>` accumulator (height = 2,
- * width = 2) with `rt_bf<WM, BK, row_l, rt_16x32_s>` operands (height = 2,
- * width = 1), issues four WMMAs in a zigzag traversal:
- *
- *   C[0][0] += A[0].B[0]  (fetch B[0], fetch A[0])
- *   C[1][0] += A[1].B[0]  (reuse B[0], fetch A[1])
- *   C[1][1] += A[1].B[1]  (fetch B[1], A[1] still warm via zigzag)
- *   C[0][1] += A[0].B[1]  (reuse B[1])
- *
- * Reuse hints are baked into the WMMA builtin's last two bool params, so the
- * hardware operand-reuse cache absorbs `B` (and the last-used `A`) without
- * inline asm. `s_clause` insertion is left to the LLVM `SIInsertHardClauses`
- * pass which clauses contiguous WMMA bursts automatically.
- *
- * Use this in the inner loop in place of `mma_ABt`. Identical accumulator
- * semantics: `D += A . B^T` accumulated into `c`.
- */
-template<ducks::rt::col_layout D, ducks::rt::row_layout A, ducks::rt::row_layout B, ducks::rt::col_layout C>
-__device__ static inline void mma_ABt_burst(D &d, const A &a, const B &b, const C &c) {
-    static_assert(D::height == 2 && D::width  == 2, "burst requires 2x2 accumulator");
-    static_assert(A::height == 2 && A::width  == 1, "burst requires A height=2 width=1");
-    static_assert(B::height == 2 && B::width  == 1, "burst requires B height=2 width=1");
-
-    // C[0][0] = A[0].B[0]   (no reuse)
-    wmma161632<false, false>(d.tiles[0][0].data,
-                              a.tiles[0][0].data, b.tiles[0][0].data,
-                              c.tiles[0][0].data);
-    // C[1][0] = A[1].B[0]   (reuse B[0])
-    wmma161632<false, true >(d.tiles[1][0].data,
-                              a.tiles[1][0].data, b.tiles[0][0].data,
-                              c.tiles[1][0].data);
-    // C[1][1] = A[1].B[1]   (no reuse -- flipping B)
-    wmma161632<false, false>(d.tiles[1][1].data,
-                              a.tiles[1][0].data, b.tiles[1][0].data,
-                              c.tiles[1][1].data);
-    // C[0][1] = A[0].B[1]   (reuse B[1])
-    wmma161632<false, true >(d.tiles[0][1].data,
-                              a.tiles[0][0].data, b.tiles[1][0].data,
-                              c.tiles[0][1].data);
-}
 #endif
+}
 
 /**
  * @brief Block scaled dot product operation for row layout.
