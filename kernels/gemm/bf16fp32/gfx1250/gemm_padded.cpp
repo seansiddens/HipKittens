@@ -3,9 +3,10 @@
  * @brief Rung 4 -- LDS-padded bf16 -> fp32 GEMM for gfx1250.
  *
  * Diff vs `gemm_async`: replace the flat LDS tile with the padded tile type
- * (`st_pad_padded_bf`, 16 B padding every 256 B for bf16) and use
- * `kittens::load_b128` for the shared -> register transfer. The padding kills
- * bank conflicts that dominated the previous rung's LDS bandwidth.
+ * (`st_pad_padded_bf`, 16 B padding every 256 B for bf16). The same
+ * `kittens::load` shared -> register call now auto-selects the wide
+ * `ds_load_b128` because the tile is padded; the padding kills the bank
+ * conflicts that dominated the previous rung's LDS bandwidth.
  */
 
 #include "common.h"
@@ -47,8 +48,8 @@ void gemm_padded_kernel(const gemm_globals g, int M, int N, int K)
 
         rt_bf<WARP_M, K_STEP, row_l, rt_16x32_s> A_reg;
         rt_bf<WARP_N, K_STEP, row_l, rt_16x32_s> B_reg;
-        kittens::load_b128<WARP_M, K_STEP>(A_reg, A_st[cur], warp_r * WARP_M * K_STEP);
-        kittens::load_b128<WARP_N, K_STEP>(B_reg, B_st[cur], warp_c * WARP_N * K_STEP);
+        kittens::load(A_reg, A_st[cur], warp_r * WARP_M * K_STEP);
+        kittens::load(B_reg, B_st[cur], warp_c * WARP_N * K_STEP);
 
         kittens::sync::wait_ds();
         mma_ABt(C_acc, A_reg, B_reg, C_acc);

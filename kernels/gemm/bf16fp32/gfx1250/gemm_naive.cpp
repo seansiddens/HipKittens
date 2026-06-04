@@ -5,11 +5,11 @@
  * Correctness baseline. Single-buffered LDS, register-mediated global -> LDS
  * copy, narrow `ds_load_b32` shared -> register, plain WMMA via `mma_ABt`.
  * Uses only:
- *   - `kittens::load`          : register-mediated copy.
- *   - `kittens::sync::sync`    : block-wide split barrier.
- *   - `kittens::sync::wait_ds` : drain LDS reads before WMMA.
- *   - `kittens::load_b32`      : narrow shared -> register load.
- *   - `kittens::mma_ABt`       : 16x16x32 WMMA via the bf16 builtin.
+ *   - `kittens::load(st,gl,idx)` : register-mediated global -> LDS copy.
+ *   - `kittens::sync::sync`      : block-wide split barrier.
+ *   - `kittens::sync::wait_ds`   : drain LDS reads before WMMA.
+ *   - `kittens::load(rt,st,off)` : shared -> register load (narrow `ds_load_b32` for the flat tile).
+ *   - `kittens::mma_ABt`         : 16x16x32 WMMA via the bf16 builtin.
  */
 
 #include "common.h"
@@ -44,8 +44,8 @@ void gemm_naive_kernel(const gemm_globals g, int M, int N, int K)
 
         rt_bf<WARP_M, K_STEP, row_l, rt_16x32_s> A_reg;
         rt_bf<WARP_N, K_STEP, row_l, rt_16x32_s> B_reg;
-        kittens::load_b32<WARP_M, K_STEP>(A_reg, A_st, warp_r * WARP_M * K_STEP);
-        kittens::load_b32<WARP_N, K_STEP>(B_reg, B_st, warp_c * WARP_N * K_STEP);
+        kittens::load(A_reg, A_st, warp_r * WARP_M * K_STEP);
+        kittens::load(B_reg, B_st, warp_c * WARP_N * K_STEP);
 
         kittens::sync::wait_ds();
         mma_ABt(C_acc, A_reg, B_reg, C_acc);

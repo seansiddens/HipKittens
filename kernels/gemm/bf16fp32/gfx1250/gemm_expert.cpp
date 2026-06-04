@@ -60,8 +60,8 @@ void gemm_expert_kernel(const gemm_globals g, int M, int N, int K)
 
             rt_bf<WARP_M, K_STEP, row_l, rt_16x32_s> A_reg;
             rt_bf<WARP_N, K_STEP, row_l, rt_16x32_s> B_reg;
-            kittens::load_b128<WARP_M, K_STEP>(A_reg, A_st[cur], warp_r * WARP_M * K_STEP);
-            kittens::load_b128<WARP_N, K_STEP>(B_reg, B_st[cur], warp_c * WARP_N * K_STEP);
+            kittens::load(A_reg, A_st[cur], warp_r * WARP_M * K_STEP);
+            kittens::load(B_reg, B_st[cur], warp_c * WARP_N * K_STEP);
 
             kittens::sync::wait();
             kittens::sync::wait_ds();
