@@ -162,7 +162,7 @@ void dispatch(gemm_globals g)
     // Same layout as `gemm_segment`/`gemm_expert` (A in seg 0, B in seg 1)
     // plus 4 barrier cells in seg 0.
     constexpr size_t bar_bytes = 4 * sizeof(sync::barrier_lds);
-    const size_t mem_size = LDS_SEGMENT_BYTES + 2 * sizeof(B_tile);
+    const size_t mem_size = MAX_SHARED_MEMORY_PER_SEGMENT + 2 * sizeof(B_tile);
     (void)bar_bytes;
     hipFuncSetAttribute(reinterpret_cast<const void*>(gemm_tdm_arrive_kernel),
                         hipFuncAttributeMaxDynamicSharedMemorySize,

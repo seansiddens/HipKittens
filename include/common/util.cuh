@@ -123,21 +123,21 @@ __host__ __device__ inline int ceil_div(int a, int b) {
 
 #ifdef KITTENS_UDNA1
 /**
- * @brief LDS capacity exposed by default per workgroup on gfx1250.
+ * @brief gfx1250 LDS capacity constants.
  *
  * On gfx1250, the **LDS scratchpad and the L1 data cache are one 384 KB SRAM
- * pool per Work-Group Processor (WGP)**, partitioned at dispatch time into six
- * 64 KB segments. At least one segment must remain L1, leaving up to 320 KB
- * addressable as LDS.
+ * pool per Compute Unit (CU)**, partitioned into six 64 KB segments. 
+ * At least one segment must remain L1, leaving up to five segments
+ * (320 KB) addressable as LDS.
  *
- * The library default exposes one segment (64 KB) of LDS; kernels needing
- * more should request a larger dynamic shared-memory size at launch via
- * `hipFuncSetAttribute`.
+ * `MAX_SHARED_MEMORY_PER_SEGMENT` is one 64 KB segment; `MAX_SHARED_MEMORY` is
+ * the full addressable LDS across all five segments. A kernel that fits in one
+ * segment requests `MAX_SHARED_MEMORY_PER_SEGMENT`; one that needs more requests
+ * a larger dynamic shared-memory size at launch via `hipFuncSetAttribute`.
  */
-constexpr int MAX_SHARED_MEMORY = 65536;
-constexpr int LDS_SEGMENT_BYTES = 65536;
-constexpr int LDS_NUM_SEGMENTS  = 5;
-constexpr int LDS_TOTAL_BYTES   = LDS_SEGMENT_BYTES * LDS_NUM_SEGMENTS;
+constexpr int MAX_SHARED_MEMORY_PER_SEGMENT = 65536;
+constexpr int SHARED_MEMORY_NUM_SEGMENTS    = 5;
+constexpr int MAX_SHARED_MEMORY             = MAX_SHARED_MEMORY_PER_SEGMENT * SHARED_MEMORY_NUM_SEGMENTS;
 constexpr int NUM_XCDS = 1;
 constexpr int CUS_PER_XCD = 64;
 constexpr int NUM_CUS = CUS_PER_XCD * NUM_XCDS;
@@ -312,12 +312,11 @@ using i32x4_lvec  = int __attribute__((__vector_size__(16))) __attribute__((addr
 /**
  * @brief Compile-time tag selecting an LDS segment for tile placement on gfx1250.
  *
- * Background. LDS and L1 share one 384 KB SRAM pool per Work-Group Processor
- * (WGP), partitioned at dispatch into six 64 KB segments (see
- * `MAX_SHARED_MEMORY` above). Up to five segments (indices 0..4, total
- * 320 KB) are addressable as LDS scratchpad; at least one segment must remain
- * L1. By convention we leave segment 5 as L1, so LDS-tile placement uses
- * indices 0..4.
+ * Background. LDS and L1 share one 384 KB SRAM pool per Compute Unit (CU),
+ * partitioned at dispatch into six 64 KB segments (see `MAX_SHARED_MEMORY`
+ * above). Up to five segments (indices 0..4, total 320 KB) are addressable as
+ * LDS scratchpad; at least one segment must remain L1. By convention we leave
+ * segment 5 as L1, so LDS-tile placement uses indices 0..4.
  *
  * Why segments matter. The LDS half of the pool is fronted by two read ports
  * delivering 256 B/cycle each. The two ports can issue in the same cycle only
@@ -331,10 +330,10 @@ using i32x4_lvec  = int __attribute__((__vector_size__(16))) __attribute__((addr
  */
 template<int IDX>
 struct segment {
-    static_assert(IDX >= 0 && IDX < LDS_NUM_SEGMENTS,
+    static_assert(IDX >= 0 && IDX < SHARED_MEMORY_NUM_SEGMENTS,
                   "segment index must be in [0, 5)");
     static constexpr int index       = IDX;
-    static constexpr int byte_offset = IDX * LDS_SEGMENT_BYTES;
+    static constexpr int byte_offset = IDX * MAX_SHARED_MEMORY_PER_SEGMENT;
 };
 
 namespace ducks {

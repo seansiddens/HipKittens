@@ -543,7 +543,7 @@ __device__ inline void load_async(st<T, ROWS, COLS, Shape>& dst, const GL& src,
  * which threads are active makes no difference. The entire tile is described
  * by a small block of scalar registers.
  *
- * A WGP has one TDM per SIMD-pair (a gfx1250 WGP is four SIMDx32s grouped into two pairs). 
+ * A CU has one TDM per SIMD-pair (a gfx1250 CU is four SIMDx32s grouped into two pairs). 
  * That single engine handles one request stream and is shared by the waves on its pair, so
  * extra issuers don't make the copy faster, they just contend for it and use
  * up its in-flight slots (at most 3 transfers per wave, 6 per SIMD).
@@ -574,7 +574,7 @@ using v8u32 = unsigned int __attribute__((ext_vector_type(8)));
  * into group 1). Pass 0 for the no-barrier path.
  */
 template<typename Shape, int ROWS, int COLS, typename T>
-__device__ __forceinline__ void build_tdm_d_2d(
+__device__ __forceinline__ void build_tdm_descriptor_2d(
     v4u32& g0, v8u32& g1,
     const T* base, T* lds_dst,
     int tensor_rows, int tensor_cols, int row_stride,
@@ -653,7 +653,7 @@ __device__ inline void load_tdm(st<T, ROWS, COLS, Shape>& dst, const GL& src,
 
     detail::v4u32 g0;
     detail::v8u32 g1;
-    detail::build_tdm_d_2d<Shape, ROWS, COLS, T>(
+    detail::build_tdm_descriptor_2d<Shape, ROWS, COLS, T>(
         g0, g1, base, dst.data, tensor_rows, tensor_cols, row_stride,
         cluster_mask, /*bar_lds_addr=*/ 0);
 
@@ -707,7 +707,7 @@ __device__ inline void load_tdm_arrive(
 
     detail::v4u32 g0;
     detail::v8u32 g1;
-    detail::build_tdm_d_2d<Shape, ROWS, COLS, T>(
+    detail::build_tdm_descriptor_2d<Shape, ROWS, COLS, T>(
         g0, g1, base, dst.data, tensor_rows, tensor_cols, row_stride,
         cluster_mask, bar_lds_addr);
 

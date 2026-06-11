@@ -81,7 +81,7 @@ void gemm_expert_kernel(const gemm_globals g, int M, int N, int K)
 
 void dispatch(gemm_globals g)
 {
-    const size_t mem_size = LDS_SEGMENT_BYTES + 2 * sizeof(B_tile);
+    const size_t mem_size = MAX_SHARED_MEMORY_PER_SEGMENT + 2 * sizeof(B_tile);
     hipFuncSetAttribute(reinterpret_cast<const void*>(gemm_expert_kernel),
                         hipFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(mem_size));
     gemm_expert_kernel<<<g.grid(), g.block(), mem_size, g.stream>>>(g, g.M(), g.N(), g.K());

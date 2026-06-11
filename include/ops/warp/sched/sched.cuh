@@ -2,7 +2,7 @@
  * @file
  * @brief Scheduling primitives for gfx1250.
  *
- * Wraps four families of low-level scheduling controls behind a
+ * Wraps three families of low-level scheduling controls behind a
  * `kittens::sched::*` API:
  *
  *   1. **Expert scheduling** -- by default a wave's memory instructions
@@ -14,15 +14,12 @@
  *      In exchange, the kernel author becomes responsible for inserting an
  *      explicit wait (`wait_alu`) wherever a later instruction really does
  *      depend on an earlier one. See `set_expert`, `expert_scope`,
- *      `claim_simd`.
+ *      `lock_simd`.
  *   2. **Wave priority** -- a hint that breaks ties when several waves on
  *      the same SIMD want to issue in the same cycle; the higher-priority
  *      wave goes first. See `set_priority` (this wave alone) and
  *      `boost_priority` (the rest of the workgroup on this SIMD).
- *   3. **Sleep** -- park the wave for a short, coarse interval. Gives a
- *      producer some headroom when a consumer would otherwise run ahead of
- *      the data it needs. See `sleep`.
- *   4. **Compiler fence** -- a compile-time-only barrier that stops the
+ *   3. **Compiler fence** -- a compile-time-only barrier that stops the
  *      compiler from reordering instructions across a point. Emits no
  *      hardware instruction and costs nothing at runtime. See
  *      `compiler_fence`.
@@ -101,7 +98,7 @@ struct expert_scope {
 };
 
 /**
- * @brief Claim the SIMD for this wave so it can issue matrix multiplies
+ * @brief Lock the SIMD for this wave so it can issue matrix multiplies
  *        back-to-back, instead of yielding to co-resident waves between them.
  *
  * Normally, after a wave issues a matrix multiply (WMMA) the hardware makes
@@ -120,7 +117,7 @@ struct expert_scope {
  * scoped and there is no guard for it: it stays in effect for the wave's
  * lifetime.
  */
-__device__ __forceinline__ void claim_simd() {
+__device__ __forceinline__ void lock_simd() {
     __builtin_amdgcn_s_setreg(detail::SCHED_MODE_CLAIM_SIMD_SIMM16, 1u);
 }
 
@@ -183,7 +180,7 @@ __device__ __forceinline__ void set_priority() {
  * the consumer warps once the prologue has loaded the first K-tile.
  *
  * The "same SIMD" qualifier matters: a gfx1250 workgroup's waves are spread
- * across the four SIMDs of a Work-Group Processor, and this only bumps the
+ * across the four SIMDs of a Compute Unit (CU), and this only bumps the
  * members on the caller's SIMD. Waves of the same workgroup on the other
  * three SIMDs keep their existing priority. Takes a few cycles to take
  * effect.
@@ -194,22 +191,6 @@ template<int DELTA>
 __device__ __forceinline__ void boost_priority() {
     static_assert(DELTA >= 0 && DELTA <= 3, "s_setprio_inc_wg takes a 2-bit constant");
     __builtin_amdgcn_s_setprio_inc_wg(static_cast<short>(DELTA));
-}
-
-/**
- * @brief Park this wave for approximately `N` cycle-groups.
- *
- * Lowers to `s_sleep N`. `N` is a small immediate (`0..15` on gfx12). The
- * sleep duration is implementation-defined and roughly proportional to
- * `N` (not exactly `N` clocks) -- treat it as a coarse pacing knob, not
- * a precise timer. Useful for giving a producer warp some headroom when
- * a consumer would otherwise spin past the data it needs.
- *
- * @tparam N sleep duration code in [0, 15].
- */
-template<int N>
-__device__ __forceinline__ void sleep() {
-    __builtin_amdgcn_s_sleep(N);
 }
 
 /**

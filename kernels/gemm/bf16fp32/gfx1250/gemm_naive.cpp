@@ -63,7 +63,7 @@ void gemm_naive_kernel(const gemm_globals g, int M, int N, int K)
 
 void dispatch(gemm_globals g)
 {
-    const size_t mem_size = g.dynamic_shared_memory();
+    const size_t mem_size = g.dynamic_shared_memory<1>();
     hipFuncSetAttribute(reinterpret_cast<const void*>(gemm_naive_kernel),
                         hipFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(mem_size));
     gemm_naive_kernel<<<g.grid(), g.block(), mem_size, g.stream>>>(g, g.M(), g.N(), g.K());

@@ -68,8 +68,8 @@ void gemm_segment_kernel(const gemm_globals g, int M, int N, int K)
 void dispatch(gemm_globals g)
 {
     // A occupies segment 0 (0..64KB); B occupies segment 1 (64KB..). We
-    // request `LDS_SEGMENT_BYTES + B_size` so the launch covers both segments.
-    const size_t mem_size = LDS_SEGMENT_BYTES + 2 * sizeof(B_tile);
+    // request `MAX_SHARED_MEMORY_PER_SEGMENT + B_size` so the launch covers both segments.
+    const size_t mem_size = MAX_SHARED_MEMORY_PER_SEGMENT + 2 * sizeof(B_tile);
     hipFuncSetAttribute(reinterpret_cast<const void*>(gemm_segment_kernel),
                         hipFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(mem_size));
     gemm_segment_kernel<<<g.grid(), g.block(), mem_size, g.stream>>>(g, g.M(), g.N(), g.K());

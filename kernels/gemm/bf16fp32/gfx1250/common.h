@@ -42,7 +42,12 @@ struct gemm_globals {
     int K() const { return a.cols(); }
     dim3   grid()  const { return dim3(M() / BLOCK_M, N() / BLOCK_N); }
     dim3   block() const { return dim3(NUM_THREADS); }
-    size_t dynamic_shared_memory() const { return kittens::MAX_SHARED_MEMORY; }
+    // LDS the kernel actually allocates: the A and B tiles, times the number
+    // of pipeline stages it buffers (1 for the single-buffered naive rung, 2
+    // for the double-buffered rungs). `sizeof(st_bf<...>)` is alignment-padded,
+    // so this matches the shared_allocator's 16-byte bumps exactly.
+    template <int STAGES = 2>
+    size_t dynamic_shared_memory() const { return STAGES * (sizeof(A_tile) + sizeof(B_tile)); }
 };
 
 /* ----------  C STORE: WMMA-acc -> global bf16  ---------- */
