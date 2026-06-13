@@ -10,6 +10,9 @@
 __pycache__/
 */printouts/*
 tests/unit/build/
+tests/unit/*/build/
+tests/unit/*/unit_tests
+hsakmt_counters.csv
 *.o
 build/
 *.egg-info/
