@@ -172,7 +172,8 @@ namespace st {
 */
 template<typename T> concept all = requires {
     typename T::identifier; // Checks if T::identifier exists
-} && std::is_same_v<typename T::identifier, identifier>; // Checks if T::identifier is ducks::st::identifier
+    requires std::is_same_v<typename T::identifier, identifier>; // Checks if T::identifier is ducks::st::identifier
+};
 
 } // namespace st
 } // namespace ducks

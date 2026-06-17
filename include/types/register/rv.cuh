@@ -96,7 +96,8 @@ namespace rv {
 template<typename T>
 concept all = requires {
     typename T::identifier; // Checks if T::identifier exists
-} && std::is_same_v<typename T::identifier, identifier>; // Checks if T::identifier is ducks::rv::identifier.
+    requires std::is_same_v<typename T::identifier, ::kittens::ducks::rv::identifier>; // fully qualified
+};
 
 template<typename T> concept naive_layout = all<T> && std::is_same_v<typename T::layout, ducks::rv_layout::naive>;
 template<typename T> concept align_layout = all<T> && std::is_same_v<typename T::layout, ducks::rv_layout::align>;

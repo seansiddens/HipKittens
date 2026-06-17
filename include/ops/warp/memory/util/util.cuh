@@ -6,8 +6,15 @@
 
 #include "../../../../common/common.cuh"
 #include <hip/hip_runtime.h>
+// amd_detail/* headers are not hipRTC-compatible (they pull in
+// host_defines.h, which re-declares __hip_internal::is_integral<bool>
+// etc. that hipRTC's auto-prepended hiprtc_runtime.h already provides).
+// `<hip/hip_runtime.h>` itself is RTC-safe and reaches the same content
+// when compiling normally, so skip the direct includes under RTC.
+#if !defined(__HIPCC_RTC__)
 #include <hip/amd_detail/amd_hip_runtime.h>
 #include <hip/amd_detail/hip_ldg.h>
+#endif
 
 namespace kittens {
 

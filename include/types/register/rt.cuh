@@ -105,7 +105,8 @@ namespace rt {
 */
 template<typename T> concept all = requires {
     typename T::identifier; // Checks if T::identifier exists
-} && std::is_same_v<typename T::identifier, identifier>; // Checks if T::identifier is ducks::rt::identifier
+    requires std::is_same_v<typename T::identifier, ::kittens::ducks::rt::identifier>; // fully qualified to disambiguate
+};
 /**
 * @brief Concept for register tiles with row layout.
 * @tparam T The type to check against the concept requirements.

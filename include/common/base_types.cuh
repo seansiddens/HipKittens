@@ -12,11 +12,22 @@
 
 #include <hip/hip_bf16.h>
 #include <hip/hip_fp16.h>
+// hip_fp8.h / hip_fp4.h / amd_hip_ocp_types.h pull in host-side code
+// (std::copysign, INFINITY from <math.h>, amd_hip_ocp_host.hpp) that
+// hipRTC's auto-prepended hiprtc_runtime.h doesn't provide. Skip them
+// under RTC; the bf16 / fp16 paths used by every RTC-compiled kernel in
+// this tree work without them. RTC consumers that need fp8/fp4 must
+// forward-declare the required type names (HK references them only in
+// static_assert lists, never instantiates them).
+#if !defined(__HIPCC_RTC__)
 #include <hip/hip_fp8.h>
 #include <hip/hip_fp4.h>
 #include <hip/amd_detail/amd_hip_ocp_types.h>
+#endif
 #include <hip/hip_runtime.h>
+#if !defined(__HIPCC_RTC__)
 #include <string>
+#endif
 #include <bit>
 
 typedef uint32_t __amd_fp8x4_storage_t;
